@@ -23,7 +23,6 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel.Unsafe;
 import io.netty.util.concurrent.EventExecutor;
 import io.netty.util.concurrent.EventExecutorGroup;
-import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
@@ -37,8 +36,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.WeakHashMap;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
 
 /**
  * The default {@link ChannelPipeline} implementation.  It is usually created
@@ -112,32 +109,11 @@ final class DefaultChannelPipeline implements ChannelPipeline {
     }
 
     @Override
-    public ChannelPipeline addFirst(EventExecutorGroup group, final String name, ChannelHandler handler) {
-        final DefaultChannelHandlerContext newCtx;
+    public synchronized  ChannelPipeline addFirst(EventExecutorGroup group, final String name, ChannelHandler handler) {
+        checkDuplicateName(name);
+        DefaultChannelHandlerContext newCtx = new DefaultChannelHandlerContext(this, group, name, handler);
 
-        synchronized (this) {
-            checkDuplicateName(name);
-            newCtx = new DefaultChannelHandlerContext(this, group, name, handler);
-
-            if (!newCtx.channel().isRegistered() || newCtx.executor().inEventLoop()) {
-                addFirst0(name, newCtx);
-                return this;
-            }
-        }
-
-        // Run the following 'waiting' code outside of the above synchronized block
-        // in order to avoid deadlock
-
-        executeOnEventLoop(newCtx, new Runnable() {
-            @Override
-            public void run() {
-                synchronized (DefaultChannelPipeline.this) {
-                    checkDuplicateName(name);
-                    addFirst0(name, newCtx);
-                }
-            }
-        });
-
+        addFirst0(name, newCtx);
         return this;
     }
 
@@ -162,31 +138,11 @@ final class DefaultChannelPipeline implements ChannelPipeline {
     }
 
     @Override
-    public ChannelPipeline addLast(EventExecutorGroup group, final String name, ChannelHandler handler) {
-        final DefaultChannelHandlerContext newCtx;
+    public synchronized ChannelPipeline addLast(EventExecutorGroup group, final String name, ChannelHandler handler) {
+        checkDuplicateName(name);
 
-        synchronized (this) {
-            checkDuplicateName(name);
-
-            newCtx = new DefaultChannelHandlerContext(this, group, name, handler);
-            if (!newCtx.channel().isRegistered() || newCtx.executor().inEventLoop()) {
-                addLast0(name, newCtx);
-                return this;
-            }
-        }
-
-        // Run the following 'waiting' code outside of the above synchronized block
-        // in order to avoid deadlock
-
-        executeOnEventLoop(newCtx, new Runnable() {
-            @Override
-            public void run() {
-                synchronized (DefaultChannelPipeline.this) {
-                    checkDuplicateName(name);
-                    addLast0(name, newCtx);
-                }
-            }
-        });
+        DefaultChannelHandlerContext newCtx = new DefaultChannelHandlerContext(this, group, name, handler);
+        addLast0(name, newCtx);
 
         return this;
     }
@@ -213,34 +169,13 @@ final class DefaultChannelPipeline implements ChannelPipeline {
     }
 
     @Override
-    public ChannelPipeline addBefore(
-            EventExecutorGroup group, String baseName, final String name, ChannelHandler handler) {
-        final DefaultChannelHandlerContext ctx;
-        final DefaultChannelHandlerContext newCtx;
+    public synchronized ChannelPipeline addBefore(
+        EventExecutorGroup group, String baseName, final String name, ChannelHandler handler) {
+        DefaultChannelHandlerContext ctx = getContextOrDie(baseName);
+        checkDuplicateName(name);
+        DefaultChannelHandlerContext newCtx = new DefaultChannelHandlerContext(this, group, name, handler);
 
-        synchronized (this) {
-            ctx = getContextOrDie(baseName);
-            checkDuplicateName(name);
-            newCtx = new DefaultChannelHandlerContext(this, group, name, handler);
-
-            if (!newCtx.channel().isRegistered() || newCtx.executor().inEventLoop()) {
-                addBefore0(name, ctx, newCtx);
-                return this;
-            }
-        }
-
-        // Run the following 'waiting' code outside of the above synchronized block
-        // in order to avoid deadlock
-
-        executeOnEventLoop(newCtx, new Runnable() {
-            @Override
-            public void run() {
-                synchronized (DefaultChannelPipeline.this) {
-                    checkDuplicateName(name);
-                    addBefore0(name, ctx, newCtx);
-                }
-            }
-        });
+        addBefore0(name, ctx, newCtx);
 
         return this;
     }
@@ -265,35 +200,12 @@ final class DefaultChannelPipeline implements ChannelPipeline {
     }
 
     @Override
-    public ChannelPipeline addAfter(
-            EventExecutorGroup group, String baseName, final String name, ChannelHandler handler) {
-        final DefaultChannelHandlerContext ctx;
-        final DefaultChannelHandlerContext newCtx;
-
-        synchronized (this) {
-            ctx = getContextOrDie(baseName);
-            checkDuplicateName(name);
-            newCtx = new DefaultChannelHandlerContext(this, group, name, handler);
-
-            if (!newCtx.channel().isRegistered() || newCtx.executor().inEventLoop()) {
-                addAfter0(name, ctx, newCtx);
-                return this;
-            }
-        }
-
-        // Run the following 'waiting' code outside of the above synchronized block
-        // in order to avoid deadlock
-
-        executeOnEventLoop(newCtx, new Runnable() {
-            @Override
-            public void run() {
-                synchronized (DefaultChannelPipeline.this) {
-                    checkDuplicateName(name);
-                    addAfter0(name, ctx, newCtx);
-                }
-            }
-        });
-
+    public synchronized ChannelPipeline addAfter(
+        EventExecutorGroup group, String baseName, final String name, ChannelHandler handler) {
+        DefaultChannelHandlerContext ctx = getContextOrDie(baseName);
+        checkDuplicateName(name);
+        DefaultChannelHandlerContext newCtx = new DefaultChannelHandlerContext(this, group, name, handler);
+        addAfter0(name, ctx, newCtx);
         return this;
     }
 
@@ -430,32 +342,11 @@ final class DefaultChannelPipeline implements ChannelPipeline {
     private DefaultChannelHandlerContext remove(final DefaultChannelHandlerContext ctx, final boolean forward) {
         assert ctx != head && ctx != tail;
 
-        DefaultChannelHandlerContext context;
-        Future<?> future;
-
         synchronized (this) {
-            if (!ctx.channel().isRegistered() || ctx.executor().inEventLoop()) {
-                remove0(ctx, forward);
-                return ctx;
-            } else {
-               future = ctx.executor().submit(new Runnable() {
-                   @Override
-                   public void run() {
-                       synchronized (DefaultChannelPipeline.this) {
-                           remove0(ctx, forward);
-                       }
-                   }
-               });
-               context = ctx;
-            }
+            remove0(ctx, forward);
         }
 
-        // Run the following 'waiting' code outside of the above synchronized block
-        // in order to avoid deadlock
-
-        waitForFuture(future);
-
-        return context;
+        return ctx;
     }
 
     @SuppressWarnings("unchecked")
@@ -525,7 +416,6 @@ final class DefaultChannelPipeline implements ChannelPipeline {
 
         assert ctx != head && ctx != tail;
 
-        Future<?> future;
         synchronized (this) {
             boolean sameName = ctx.name().equals(newName);
             if (!sameName) {
@@ -535,26 +425,8 @@ final class DefaultChannelPipeline implements ChannelPipeline {
             final DefaultChannelHandlerContext newCtx =
                     new DefaultChannelHandlerContext(this, ctx.executor, newName, newHandler);
 
-            if (!newCtx.channel().isRegistered() || newCtx.executor().inEventLoop()) {
-                replace0(ctx, newName, newCtx, forward);
-
-                return ctx.handler();
-            } else {
-                future = newCtx.executor().submit(new Runnable() {
-                    @Override
-                    public void run() {
-                        synchronized (DefaultChannelPipeline.this) {
-                            replace0(ctx, newName, newCtx, forward);
-                        }
-                    }
-                });
-            }
+            replace0(ctx, newName, newCtx, forward);
         }
-
-        // Run the following 'waiting' code outside of the above synchronized block
-        // in order to avoid deadlock
-
-        waitForFuture(future);
 
         return ctx.handler();
     }
@@ -678,54 +550,6 @@ final class DefaultChannelPipeline implements ChannelPipeline {
         }
 
         ctx.setRemoved();
-    }
-
-    /**
-     * Executes a task on the event loop and waits for it to finish.  If the task is interrupted, then the
-     * current thread will be interrupted.  It is expected that the task performs any appropriate locking.
-     * <p>
-     * If the {@link Runnable#run()} call throws a {@link Throwable}, but it is not an instance of
-     * {@link Error} or {@link RuntimeException}, then it is wrapped inside a
-     * {@link ChannelPipelineException} and that is thrown instead.</p>
-     *
-     * @param r execute this runnable
-     * @see Runnable#run()
-     * @see Future#get()
-     * @throws Error if the task threw this.
-     * @throws RuntimeException if the task threw this.
-     * @throws ChannelPipelineException with a {@link Throwable} as a cause, if the task threw another type of
-     *         {@link Throwable}.
-     */
-    private static void executeOnEventLoop(DefaultChannelHandlerContext ctx, Runnable r) {
-        waitForFuture(ctx.executor().submit(r));
-    }
-
-    /**
-     * Waits for a future to finish.  If the task is interrupted, then the current thread will be interrupted.
-     * It is expected that the task performs any appropriate locking.
-     * <p>
-     * If the internal call throws a {@link Throwable}, but it is not an instance of {@link Error} or
-     * {@link RuntimeException}, then it is wrapped inside a {@link ChannelPipelineException} and that is
-     * thrown instead.</p>
-     *
-     * @param future wait for this future
-     * @see Future#get()
-     * @throws Error if the task threw this.
-     * @throws RuntimeException if the task threw this.
-     * @throws ChannelPipelineException with a {@link Throwable} as a cause, if the task threw another type of
-     *         {@link Throwable}.
-     */
-    private static void waitForFuture(Future<?> future) {
-        try {
-            future.get();
-        } catch (ExecutionException ex) {
-            // In the arbitrary case, we can throw Error, RuntimeException, and Exception
-            PlatformDependent.throwException(ex.getCause());
-        } catch (InterruptedException ex) {
-            // Interrupt the calling thread (note that this method is not called from the event loop)
-
-            Thread.currentThread().interrupt();
-        }
     }
 
     @Override
